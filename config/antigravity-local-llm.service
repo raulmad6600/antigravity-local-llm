@@ -1,0 +1,26 @@
+[Unit]
+Description=Antigravity Local LLM API Server
+Documentation=https://github.com/raulmad6600/antigravity-local-llm
+After=network.target
+
+[Service]
+Type=simple
+# Update these values for your system:
+# User=deploy
+# WorkingDirectory=/home/deploy/antigravity-local-llm
+# ExecStart=/home/deploy/antigravity-local-llm/venv/bin/python /home/deploy/antigravity-local-llm/run.py
+
+Restart=always
+RestartSec=10
+StandardOutput=append:/var/log/antigravity-local-llm/api.log
+StandardError=append:/var/log/antigravity-local-llm/api-error.log
+
+# Limit resources (optional)
+MemoryLimit=1G
+CPUQuota=80%
+
+# Restart on boot
+RemainAfterExit=no
+
+[Install]
+WantedBy=multi-user.target
