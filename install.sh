@@ -237,73 +237,73 @@ start_api() {
     
     source venv/bin/activate
     
+    # Kill ALL old Python API processes first
+    log_info "Cleaning up old API processes..."
+    pkill -9 -f "python.*run.py" 2>/dev/null || true
+    sleep 1
+    
     # Ensure .env exists
     if [ ! -f .env ]; then
         log_info "Creating .env file from .env.example..."
         cp .env.example .env 2>/dev/null || echo "PORT=8000" > .env
-        log_success ".env created"
     fi
     
-    # Check if port 8000 is already in use
+    # Find available port (8000-8005)
     local port=8000
-    local port_process=$(lsof -ti:$port 2>/dev/null | head -1 || true)
+    log_info "Checking port availability..."
     
-    if [ -n "$port_process" ]; then
-        log_warning "Port $port is already in use (PID: $port_process)"
-        
-        # Check if it's our Python API process
-        if ps -p "$port_process" -o command= 2>/dev/null | grep -q "python.*run.py"; then
-            log_info "Found old Python API process, stopping it..."
-            kill -9 "$port_process" 2>/dev/null || true
-            sleep 2
-            log_success "Old API process stopped"
+    for try_port in 8000 8001 8002 8003 8004 8005; do
+        if ! lsof -ti:$try_port >/dev/null 2>&1; then
+            port=$try_port
+            log_success "Port $try_port is available"
+            break
         else
-            # It's a different process, find an available port
-            local proc_info=$(ps -p "$port_process" -o comm= 2>/dev/null || echo "unknown")
-            log_warning "Port 8000 is used by: $proc_info (not our API)"
-            
-            # Find next available port
-            for try_port in 8001 8002 8003 8004 8005; do
-                if ! lsof -ti:$try_port >/dev/null 2>&1; then
-                    port=$try_port
-                    log_info "Using alternative port $port instead"
-                    
-                    # Update .env with new port
-                    if grep -q "^PORT=" .env; then
-                        sed -i.bak "s/^PORT=.*/PORT=$try_port/" .env 2>/dev/null || \
-                        sed -i "" "s/^PORT=.*/PORT=$try_port/" .env  # macOS compatible
-                    else
-                        echo "PORT=$try_port" >> .env
-                    fi
-                    log_success "Updated PORT to $port in .env"
-                    break
-                fi
-            done
+            local proc_info=$(lsof -ti:$try_port 2>/dev/null | xargs ps -p 2>/dev/null | tail -1 | awk '{print $NF}' || echo "unknown")
+            log_info "  Port $try_port in use by: $proc_info"
         fi
+    done
+    
+    # Update .env with selected port
+    if grep -q "^PORT=" .env; then
+        sed -i.bak "s/^PORT=.*/PORT=$port/" .env 2>/dev/null || \
+        sed -i "" "s/^PORT=.*/PORT=$port/" .env  # macOS compatible
+    else
+        echo "PORT=$port" >> .env
     fi
+    log_info "Set PORT=$port in .env"
     
     log_info "Starting API server on port $port..."
     nohup python3 run.py > api.log 2>&1 &
     local api_pid=$!
-    sleep 8
     
-    # Give it a bit more time to fully start
-    log_info "Waiting for server to be ready..."
+    log_info "Waiting for server startup (PID: $api_pid)..."
     sleep 3
     
-    # Just check if we can see the process or port is listening
-    if lsof -ti:$port >/dev/null 2>&1; then
-        log_success "API server started successfully on port $port"
-        API_PORT=$port  # Update global API_PORT for later tests
-    elif pgrep -f "python.*run.py" > /dev/null; then
-        log_success "API server process is running on port $port"
-        API_PORT=$port  # Update global API_PORT for later tests
-    else
-        log_warning "Could not verify server startup, but continuing anyway..."
-        log_info "Check logs with: tail -f api.log"
+    # Verify server is actually listening on the port
+    local max_checks=12
+    local check=0
+    while [ $check -lt $max_checks ]; do
+        if lsof -ti:$port >/dev/null 2>&1; then
+            log_success "✅ API server listening on port $port"
+            API_PORT=$port
+            return 0
+        fi
+        check=$((check + 1))
+        log_info "  Attempt $check/$max_checks: waiting for port $port..."
+        sleep 1
+    done
+    
+    # Fallback: check if process exists even if port check fails
+    if pgrep -f "python.*run.py" > /dev/null 2>&1; then
+        log_warning "⚠️  Process running but port not responding yet (may still be starting)"
         API_PORT=$port
-        sleep 2  # Give it one more chance
+        sleep 3
+        return 0
     fi
+    
+    log_error "❌ Server failed to start. Check logs: tail -f api.log"
+    cat api.log | tail -20
+    return 1
 }
 
 run_tests() {
