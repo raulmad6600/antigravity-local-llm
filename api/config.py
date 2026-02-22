@@ -1,5 +1,6 @@
 from pydantic_settings import BaseSettings
 from pathlib import Path
+from pydantic import Field
 
 
 # Leer versión desde archivo VERSION
@@ -15,14 +16,25 @@ class Settings(BaseSettings):
     app_name: str = "Antigravity Local LLM"
     app_version: str = get_version()
     debug: bool = True
-    ollama_model: str = "llama3"
-    ollama_base_url: str = "http://localhost:11434"
+    log_level: str = "INFO"
+    ollama_model: str = Field(default="llama3", alias="OLLAMA_MODEL")
+    ollama_base_url: str = Field(default="http://localhost:11434", alias="OLLAMA_BASE_URL")
     max_iterations: int = 3
-    host: str = "0.0.0.0"
-    port: int = 8000
+    api_host: str = Field(default="0.0.0.0", alias="HOST")
+    api_port: int = Field(default=8000, alias="PORT")
+    
+    # Aliases for backward compatibility
+    @property
+    def host(self) -> str:
+        return self.api_host
+    
+    @property
+    def port(self) -> int:
+        return self.api_port
 
     class Config:
         env_file = ".env"
+        case_sensitive = False
 
 
 settings = Settings()
