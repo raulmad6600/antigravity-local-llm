@@ -85,8 +85,12 @@ deploy_remote() {
     local host_spec="$1"
     local user=$(echo "$host_spec" | cut -d: -f1 | cut -d@ -f1)
     local host=$(echo "$host_spec" | cut -d@ -f2 | cut -d: -f1)
-    local port=$(echo "$host_spec" | cut -d: -f2)
-    port=${port:-22}
+    
+    # Extract port correctly - only if : exists in the full spec
+    local port=22
+    if echo "$host_spec" | grep -q ":"; then
+        port=$(echo "$host_spec" | rev | cut -d: -f1 | rev)
+    fi
     
     print_header "Remote Deployment to $user@$host:$port"
     
