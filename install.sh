@@ -179,6 +179,27 @@ verify_system() {
         fi
     fi
     log_success "All system requirements met"
+    
+    # Check for Ollama
+    print_section "Checking for Ollama"
+    if command -v ollama &>/dev/null; then
+        log_success "Ollama is installed"
+        OLLAMA_VERSION=$(ollama --version)
+        log_info "Version: $OLLAMA_VERSION"
+    else
+        log_warning "Ollama is NOT installed"
+        log_info "Installation guide: https://ollama.ai"
+        log_info "Quick install (macOS): brew install ollama"
+        log_info "Quick install (Linux): curl https://ollama.ai/install.sh | sh"
+    fi
+    
+    # Check if Ollama server is running
+    if curl -s http://localhost:11434/api/tags >/dev/null 2>&1; then
+        log_success "Ollama server is running on port 11434"
+    else
+        log_warning "Ollama server is NOT running"
+        log_info "Start Ollama with: ollama serve"
+    fi
 }
 
 setup_environment() {
@@ -230,6 +251,40 @@ stop_running_api() {
     find . -type d -name __pycache__ -exec rm -rf {} + 2>/dev/null || true
     find . -name "*.pyc" -delete 2>/dev/null || true
     log_success "Cache cleared"
+    
+    # Check and start Ollama if needed
+    print_section "Step 5.5/8: Ensuring Ollama is Running"
+    
+    if ! curl -s http://localhost:11434/api/tags >/dev/null 2>&1; then
+        if command -v ollama &>/dev/null; then
+            log_warning "Ollama is not running, attempting to start..."
+            if [ "$(uname -s)" = "Darwin" ]; then
+                # macOS: start Ollama in background
+                nohup ollama serve > ollama.log 2>&1 &
+                log_info "Started Ollama, waiting 5 seconds..."
+                sleep 5
+            else
+                # Linux: try to start
+                log_info "Starting Ollama (may require manual intervention)..."
+                nohup ollama serve > ollama.log 2>&1 &
+                sleep 5
+            fi
+            
+            # Verify Ollama started
+            if curl -s http://localhost:11434/api/tags >/dev/null 2>&1; then
+                log_success "✅ Ollama is now running"
+            else
+                log_error "❌ Could not start Ollama, please run manually: ollama serve"
+            fi
+        else
+            log_error "❌ Ollama is not installed"
+            log_info "Install from: https://ollama.ai"
+            log_info "Or on macOS: brew install ollama"
+            log_info "Then pull model: ollama pull llama3"
+        fi
+    else
+        log_success "✅ Ollama is already running"
+    fi
 }
 
 start_api() {
@@ -314,39 +369,65 @@ run_tests() {
     log_info "Waiting for API to be fully ready..."
     sleep 3
     
-    # Test 1: Configuration verification
-    log_info "Test 1/3: Configuration verification..."
-    if python3 tests/verify.py > /dev/null 2>&1; then
-        log_success "Configuration verification passed"
-    else
-        log_warning "Configuration verification skipped (optional test)"
-    fi
-    
-    # Test 2: Mock orchestrator test
-    log_info "Test 2/3: Mock pipeline test..."
-    if timeout 30 python3 tests/test_mock.py > /dev/null 2>&1; then
-        log_success "Mock pipeline test passed"
-    else
-        log_warning "Mock pipeline test skipped (optional test)"
-    fi
-    
-    # Test 3: Health check
-    log_info "Test 3/3: Health check endpoint..."
+    # Test 1: Health check
+    log_info "Test 1/4: Health check endpoint..."
     local health_ok=0
-    for i in {1..15}; do
+    for i in {1..10}; do
         if curl -s http://localhost:$API_PORT/health 2>/dev/null | grep -q "\"status\":\"ok\""; then
-            log_success "Health check passed"
-            curl -s http://localhost:$API_PORT/health | python3 -m json.tool | head -5
+            log_success "✅ Health check passed"
             health_ok=1
             break
         fi
-        log_info "  Attempt $i/15: waiting for server..."
+        log_info "  Attempt $i/10: waiting for server..."
         sleep 1
     done
     
     if [ $health_ok -eq 0 ]; then
-        log_warning "Health check could not reach server (server might still be starting)"
-        log_info "Run manually: curl http://localhost:$API_PORT/health"
+        log_warning "Health check timed out"
+    fi
+    
+    # Test 2: List models endpoint
+    log_info "Test 2/4: Models endpoint..."
+    if curl -s http://localhost:$API_PORT/v1/models 2>/dev/null | grep -q "local"; then
+        log_success "✅ Models endpoint working"
+    else
+        log_warning "Models endpoint check skipped"
+    fi
+    
+    # Test 3: Check if Ollama is responding
+    log_info "Test 3/4: Verifying Ollama connection..."
+    if curl -s http://localhost:11434/api/tags 2>/dev/null | grep -q "models"; then
+        log_success "✅ Ollama server is responding"
+        
+        # Check for llama3 model
+        if curl -s http://localhost:11434/api/tags 2>/dev/null | grep -q "llama3"; then
+            log_success "✅ llama3 model is available"
+        else
+            log_warning "⚠️  llama3 model not found (pull with: ollama pull llama3)"
+        fi
+    else
+        log_error "❌ Ollama is NOT responding on localhost:11434"
+        log_info "   Make sure Ollama is running: ollama serve"
+        log_info "   If Ollama is on a different machine, update .env: OLLAMA_BASE_URL=http://ollama-server:11434"
+    fi
+    
+    # Test 4: Chat completion endpoint (optional - might be slow)
+    log_info "Test 4/4: Chat completion endpoint..."
+    log_info "  Testing with 30 second timeout..."
+    
+    CHAT_TEST=$(timeout 30 curl -s -X POST http://localhost:$API_PORT/v1/chat/completions \
+      -H 'Content-Type: application/json' \
+      -d '{"model": "local", "messages": [{"role": "user", "content": "Hi"}]}' 2>/dev/null)
+    
+    if echo "$CHAT_TEST" | grep -q "choices"; then
+        log_success "✅ Chat endpoint responded"
+        if echo "$CHAT_TEST" | grep -q "I encountered an error"; then
+            log_warning "⚠️  Chat endpoint returned error (check Ollama connection)"
+        else
+            log_success "✅ Chat endpoint working correctly"
+        fi
+    else
+        log_warning "⚠️  Chat endpoint timeout or error (this may be normal if Ollama is slow)"
     fi
 }
 
@@ -417,12 +498,25 @@ print_summary() {
         API_STATUS="${RED}❌ Not responding${NC}"
     fi
     
+    # Check Ollama status
+    OLLAMA_STATUS="${RED}❌ Not found${NC}"
+    if curl -s http://localhost:11434/api/tags >/dev/null 2>&1; then
+        OLLAMA_STATUS="${GREEN}✅ Running${NC}"
+    fi
+    
+    # Check llama3 model
+    MODEL_STATUS="${RED}❌ Not found${NC}"
+    if curl -s http://localhost:11434/api/tags 2>/dev/null | grep -q "llama3"; then
+        MODEL_STATUS="${GREEN}✅ Available${NC}"
+    fi
+    
     echo -e "${BLUE}📊 Status:${NC}"
     echo -e "   Application: Antigravity Local LLM"
     echo -e "   Version: $VERSION"
     echo -e "   API Status: $API_STATUS"
     echo -e "   API Port: $API_PORT"
-    echo -e "   Ollama Port: $OLLAMA_PORT"
+    echo -e "   Ollama Status: $OLLAMA_STATUS"
+    echo -e "   Model (llama3): $MODEL_STATUS"
     echo ""
     
     echo -e "${BLUE}🔗 Access Points:${NC}"
@@ -433,22 +527,39 @@ print_summary() {
     
     echo -e "${BLUE}📝 Useful Commands:${NC}"
     echo -e "   View logs: tail -f api.log"
-    echo -e "   Run tests: python tests/test_mock.py"
-    echo -e "   Verify config: python tests/verify.py"
+    echo -e "   View Ollama logs: tail -f ollama.log"
     echo -e "   Stop API: pkill -f 'python.*run.py'"
+    echo -e "   Stop Ollama: pkill -f 'ollama serve'"
     echo ""
     
+    # Troubleshooting section
+    echo -e "${YELLOW}🔧 Troubleshooting:${NC}"
+    
+    if ! curl -s http://localhost:11434/api/tags >/dev/null 2>&1; then
+        echo -e "   ${RED}❌ Ollama is not responding${NC}"
+        echo -e "      1. Check if Ollama is installed: ${BLUE}which ollama${NC}"
+        echo -e "      2. Start Ollama: ${BLUE}ollama serve${NC}"
+        echo -e "      3. Or start in background: ${BLUE}nohup ollama serve > ollama.log 2>&1 &${NC}"
+    fi
+    
+    if ! curl -s http://localhost:11434/api/tags 2>/dev/null | grep -q "llama3"; then
+        echo -e "   ${YELLOW}⚠️  llama3 model is not available${NC}"
+        echo -e "      Pull the model: ${BLUE}ollama pull llama3${NC}"
+    fi
+    
     if [ "$(uname -s)" = "Linux" ]; then
-        echo -e "${BLUE}🔧 Linux Services:${NC}"
+        echo -e "\n${BLUE}🔧 Linux Services:${NC}"
         echo -e "   Systemd status: sudo systemctl status antigravity-local-llm"
         echo -e "   View logs: sudo journalctl -u antigravity-local-llm -f"
     fi
     
-    echo -e "${BLUE}📚 Documentation:${NC}"
+    echo -e "\n${BLUE}📚 Documentation:${NC}"
     echo -e "   README: README.md"
-    echo -e "   Deployment: See README.md > Production Operations"
+    echo -e "   Troubleshooting: bash troubleshoot.sh"
+    echo -e "   Quick Start: cat QUICK_START.md"
     echo ""
 }
+
 
 # ============================================================
 # MAIN EXECUTION
