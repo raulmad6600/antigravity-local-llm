@@ -237,7 +237,7 @@ start_api() {
     
     source venv/bin/activate
     log_info "Starting API server..."
-    nohup python run.py > api.log 2>&1 &
+    nohup python3 run.py > api.log 2>&1 &
     sleep 4
     
     # Verify it's running
@@ -257,7 +257,7 @@ run_tests() {
     
     # Test 1: Configuration verification
     log_info "Test 1/3: Configuration verification..."
-    if python tests/verify.py > /dev/null 2>&1; then
+    if python3 tests/verify.py > /dev/null 2>&1; then
         log_success "Configuration verification passed"
     else
         log_error "Configuration verification failed"
@@ -266,7 +266,7 @@ run_tests() {
     
     # Test 2: Mock orchestrator test
     log_info "Test 2/3: Mock pipeline test..."
-    if timeout 30 python tests/test_mock.py > /dev/null 2>&1; then
+    if timeout 30 python3 tests/test_mock.py > /dev/null 2>&1; then
         log_success "Mock pipeline test passed"
     else
         log_error "Mock pipeline test failed"
@@ -278,7 +278,7 @@ run_tests() {
     for i in {1..10}; do
         if curl -s http://localhost:$API_PORT/health | grep -q "\"status\":\"ok\""; then
             log_success "Health check passed"
-            curl -s http://localhost:$API_PORT/health | python -m json.tool | head -5
+            curl -s http://localhost:$API_PORT/health | python3 -m json.tool | head -5
             break
         fi
         if [ $i -eq 10 ]; then
