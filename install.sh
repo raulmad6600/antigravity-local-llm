@@ -285,10 +285,23 @@ start_api() {
     log_info "Starting API server on port $port..."
     nohup python3 run.py > api.log 2>&1 &
     local api_pid=$!
-    sleep 4
+    sleep 6
     
-    # Verify it's running
-    if pgrep -f "python.*run.py" > /dev/null; then
+    # Verify it's running by checking if port is listening
+    local max_retries=5
+    local retry=0
+    local server_ready=0
+    
+    while [ $retry -lt $max_retries ]; do
+        if lsof -ti:$port >/dev/null 2>&1 || pgrep -f "python.*run.py" > /dev/null; then
+            server_ready=1
+            break
+        fi
+        sleep 1
+        ((retry++))
+    done
+    
+    if [ $server_ready -eq 1 ]; then
         log_success "API server started successfully on port $port"
         API_PORT=$port  # Update global API_PORT for later tests
     else
