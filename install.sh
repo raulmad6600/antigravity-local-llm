@@ -237,15 +237,22 @@ start_api() {
     
     source venv/bin/activate
     
+    # Ensure .env exists
+    if [ ! -f .env ]; then
+        log_info "Creating .env file from .env.example..."
+        cp .env.example .env 2>/dev/null || echo "PORT=8000" > .env
+        log_success ".env created"
+    fi
+    
     # Check if port 8000 is already in use
     local port=8000
-    local port_process=$(lsof -ti:$port 2>/dev/null || true)
+    local port_process=$(lsof -ti:$port 2>/dev/null | head -1 || true)
     
     if [ -n "$port_process" ]; then
         log_warning "Port $port is already in use (PID: $port_process)"
         
         # Check if it's our Python API process
-        if ps -p "$port_process" -o command= | grep -q "python.*run.py"; then
+        if ps -p "$port_process" -o command= 2>/dev/null | grep -q "python.*run.py"; then
             log_info "Found old Python API process, stopping it..."
             kill -9 "$port_process" 2>/dev/null || true
             sleep 2
@@ -262,8 +269,12 @@ start_api() {
                     log_info "Using alternative port $port instead"
                     
                     # Update .env with new port
-                    sed -i.bak "s/^PORT=.*/PORT=$try_port/" .env 2>/dev/null || \
-                    sed -i "" "s/^PORT=.*/PORT=$try_port/" .env  # macOS compatible
+                    if grep -q "^PORT=" .env; then
+                        sed -i.bak "s/^PORT=.*/PORT=$try_port/" .env 2>/dev/null || \
+                        sed -i "" "s/^PORT=.*/PORT=$try_port/" .env  # macOS compatible
+                    else
+                        echo "PORT=$try_port" >> .env
+                    fi
                     log_success "Updated PORT to $port in .env"
                     break
                 fi
