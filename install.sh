@@ -236,13 +236,50 @@ start_api() {
     print_section "Step 6/8: Starting API Server"
     
     source venv/bin/activate
-    log_info "Starting API server..."
+    
+    # Check if port 8000 is already in use
+    local port=8000
+    local port_process=$(lsof -ti:$port 2>/dev/null || true)
+    
+    if [ -n "$port_process" ]; then
+        log_warning "Port $port is already in use (PID: $port_process)"
+        
+        # Check if it's our Python API process
+        if ps -p "$port_process" -o command= | grep -q "python.*run.py"; then
+            log_info "Found old Python API process, stopping it..."
+            kill -9 "$port_process" 2>/dev/null || true
+            sleep 2
+            log_success "Old API process stopped"
+        else
+            # It's a different process, find an available port
+            local proc_info=$(ps -p "$port_process" -o comm= 2>/dev/null || echo "unknown")
+            log_warning "Port 8000 is used by: $proc_info (not our API)"
+            
+            # Find next available port
+            for try_port in 8001 8002 8003 8004 8005; do
+                if ! lsof -ti:$try_port >/dev/null 2>&1; then
+                    port=$try_port
+                    log_info "Using alternative port $port instead"
+                    
+                    # Update .env with new port
+                    sed -i.bak "s/^PORT=.*/PORT=$try_port/" .env 2>/dev/null || \
+                    sed -i "" "s/^PORT=.*/PORT=$try_port/" .env  # macOS compatible
+                    log_success "Updated PORT to $port in .env"
+                    break
+                fi
+            done
+        fi
+    fi
+    
+    log_info "Starting API server on port $port..."
     nohup python3 run.py > api.log 2>&1 &
+    local api_pid=$!
     sleep 4
     
     # Verify it's running
     if pgrep -f "python.*run.py" > /dev/null; then
-        log_success "API server started successfully"
+        log_success "API server started successfully on port $port"
+        API_PORT=$port  # Update global API_PORT for later tests
     else
         log_error "Failed to start API server"
         tail -20 api.log
